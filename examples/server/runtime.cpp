@@ -322,6 +322,12 @@ std::string video_mime_type(const std::string& output_format) {
 }
 
 bool runtime_supports_generation_mode(const ServerRuntime& runtime, SDMode mode) {
+    if (runtime.models->sleeping) {
+        if (mode == VID_GEN)
+            return runtime.models->sleeping_supports_video;
+        if (mode == IMG_GEN)
+            return runtime.models->sleeping_supports_image;
+    }
     if (mode == VID_GEN) {
         return sd_ctx_supports_video_generation(runtime.sd_ctx);
     }
@@ -351,6 +357,7 @@ ArgOptions SDSvrParams::get_options() {
 
     options.int_options = {
         {"", "--listen-port", "server listen port (default: 1234)", &listen_port},
+        {"--ttl", "--sleep-idle-seconds", "unload the model after this many idle seconds and reload on the next generation request (0 disables, default: 0)", &sleep_idle_seconds},
     };
 
     options.bool_options = {
@@ -378,6 +385,10 @@ ArgOptions SDSvrParams::get_options() {
 }
 
 bool SDSvrParams::validate() {
+    if (sleep_idle_seconds < 0) {
+        LOG_ERROR("error: sleep_idle_seconds must be nonnegative");
+        return false;
+    }
     if (listen_ip.empty()) {
         LOG_ERROR("error: the following arguments are required: listen_ip");
         return false;
@@ -408,6 +419,7 @@ std::string SDSvrParams::to_string() const {
         << "  log_level: " << log_level_name(log_level) << ",\n"
         << "  listen_ip: " << listen_ip << ",\n"
         << "  listen_port: \"" << listen_port << "\",\n"
+        << "  sleep_idle_seconds: " << sleep_idle_seconds << ",\n"
         << "  serve_html_path: \"" << serve_html_path << "\",\n"
         << "}";
     return oss.str();

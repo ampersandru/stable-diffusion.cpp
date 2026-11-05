@@ -71,12 +71,22 @@ Recipe defaults apply when a generation request omits the corresponding
 parameters. Image editing endpoints retain their existing input-image size
 inference when dimensions are omitted.
 
-Without a loaded model, generation endpoints return HTTP 503 with
+When `--sleep-idle-seconds N` (alias `--ttl N`) is positive, the server unloads
+the model context after N idle seconds and reports `state: "sleeping"`. All six
+image/video generation endpoints automatically wake a sleeping model before
+validating and executing the request. The triggering request waits for loading;
+concurrent generation requests share that reload. Resolved startup or recipe
+configuration and generation defaults are preserved. Polling does not wake the
+model or extend its idle lifetime. Explicit unloading disables automatic waking.
+Status includes `sleep_idle_seconds` (0 means disabled). See
+[idle model unloading](README.md#idle-model-unloading) for timing and failures.
+
+Without a loaded or sleeping model, generation endpoints return HTTP 503 with
 `{"error":"No model is loaded","code":"model_not_loaded"}`.
 While loading/unloading, endpoints that access the context return HTTP 503
 with `code: "model_loading"`. These errors retain the existing string-valued
 `error` field. Job polling/cancellation, catalog queries and model status remain
-available during loading. Model lists are empty when no model is loaded;
+available during loading. Model lists retain sleeping models and are empty after explicit unloading;
 `/v1/models` retains the `sd-cpp-local` ID when ready.
 
 | Method | Endpoint | Response / behavior |
@@ -137,7 +147,7 @@ failure returns HTTP 422 (`model_load_failed`) and leaves no active context.
 The load HTTP request waits for completion; a separate client can poll status
 while it runs. Refreshing the catalog never modifies an already loaded context.
 
-Status uses `state: empty | loading | ready | error`, `recipe` (ID or null),
+Status uses `state: empty | loading | ready | sleeping | error`, `recipe` (ID or null),
 `models` (slot-to-file-ID mapping), and `error` (string or null). A monotonically
 increasing `revision` identifies runtime transitions within this server process.
 Command-line preloading keeps `origin: command_line` and `recipe: null` for

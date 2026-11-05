@@ -367,7 +367,7 @@ json resolve_recipe_features(const json& recipe) {
 }
 
 json model_generation_features(const ServerRuntime& runtime) {
-    if (!runtime.sd_ctx || runtime.models->active_recipe.is_null()) {
+    if ((!runtime.sd_ctx && !runtime.models->sleeping) || runtime.models->active_recipe.is_null()) {
         json features = k_recipe_features;
         for (auto& feature : features)
             feature = false;
@@ -632,8 +632,9 @@ void refresh_model_catalog(ServerRuntime& runtime) {
 
 json model_status(ServerRuntime& runtime) {
     std::lock_guard<std::mutex> lock(runtime.models->status_mutex);
-    auto& models = *runtime.models;
-    json status  = models.status;
+    auto& models                 = *runtime.models;
+    json status                  = models.status;
+    status["sleep_idle_seconds"] = runtime.svr_params->sleep_idle_seconds;
     if (status["state"] == "loading" && !status["load_elapsed_seconds"].is_null()) {
         status["load_elapsed_seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - models.load_started_at).count();
     }
@@ -665,6 +666,7 @@ void initialize_server_models(ServerRuntime& runtime) {
         models.status["runtime_recipe"]            = models.active_recipe;
     }
     refresh_model_catalog(runtime);
+    mark_model_activity(runtime);
 }
 
 void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& context, SDGenerationParams& defaults, json* loaded_recipe) {

@@ -243,6 +243,42 @@ request parameters take precedence.
 See [the API reference](api.md#model-management) for recipe fields, supported
 slots, management endpoints, and compatibility behavior.
 
+## Idle model unloading
+
+Use `--sleep-idle-seconds 300` (or `--ttl 300`) to unload the model after five
+minutes without generation activity. The default, `0`, disables idle unloading.
+Negative values are rejected. For example:
+
+```sh
+sd-server -m /models/model.safetensors --backend cuda0 --params-backend cuda0 --ttl 300
+```
+
+The server remains running and automatically reloads the model before handling
+the next image or video generation request, including OpenAI and WebUI-compatible
+requests from clients such as Open WebUI. The first request after sleep waits for
+model initialization; clients must allow enough time for this reload. Concurrent
+generation requests share one reload.
+
+Active requests and queued/running generation jobs prevent unloading. The idle
+timer starts at model initialization and resets when a generation request or job
+finishes, including failures and cancellation. Status, model-list and progress
+polling do not reset the timer or wake the model. The worker checks for idle
+unloading once per second, so the timeout is approximate.
+
+Sleep destroys the complete model context, releasing its VRAM and system RAM
+allocations, while retaining resolved model paths, backend settings, recipe
+metadata and generation defaults for reloading. This also works with models
+loaded through startup arguments, without creating a recipe. Model files must
+remain available at the same paths. Operating-system file caches and GPU driver
+allocations are outside the model context's lifetime.
+
+`GET /sdcpp/v1/models/status` reports `state: "sleeping"` after idle unloading.
+Sleeping models remain listed by the compatibility model-list endpoints.
+An explicit `POST /sdcpp/v1/models/unload` clears the sleeping configuration and
+disables automatic waking until another model is loaded. If automatic reloading
+fails, the triggering request returns HTTP 422 with `code: "model_load_failed"`;
+status reports `error`, and recovery requires an explicit model load or restart.
+
 # Example
 
 The following example starts `sd-server` with a standalone diffusion model, VAE, and LLM text encoder:
