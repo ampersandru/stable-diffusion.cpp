@@ -634,7 +634,9 @@ json model_status(ServerRuntime& runtime) {
     std::lock_guard<std::mutex> lock(runtime.models->status_mutex);
     auto& models                 = *runtime.models;
     json status                  = models.status;
-    status["sleep_idle_seconds"] = runtime.svr_params->sleep_idle_seconds;
+    status["sleep_idle_seconds"] = models.sleep_idle_seconds.load();
+    if (!models.command_line_recipe.is_null())
+        status["command_line_recipe"] = models.command_line_recipe;
     if (status["state"] == "loading" && !status["load_elapsed_seconds"].is_null()) {
         status["load_elapsed_seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - models.load_started_at).count();
     }
@@ -645,11 +647,14 @@ void initialize_server_models(ServerRuntime& runtime) {
     auto& models        = *runtime.models;
     models.base_context = *runtime.ctx_params;
     clear_model_paths(models.base_context);
-    models.base_defaults = *runtime.default_gen_params;
+    models.base_defaults      = *runtime.default_gen_params;
+    models.sleep_idle_seconds = runtime.svr_params->sleep_idle_seconds;
     if (runtime.sd_ctx) {
-        models.status["state"]  = "ready";
-        models.status["origin"] = "command_line";
-        json features           = json::array();
+        models.command_line_context  = *runtime.ctx_params;
+        models.command_line_defaults = *runtime.default_gen_params;
+        models.status["state"]       = "ready";
+        models.status["origin"]      = "command_line";
+        json features                = json::array();
         for (const auto& feature : k_recipe_features)
             features.push_back(feature.first);
         models.active_recipe = {
@@ -664,6 +669,7 @@ void initialize_server_models(ServerRuntime& runtime) {
         };
         models.active_recipe["effective_features"] = resolve_recipe_features(models.active_recipe);
         models.status["runtime_recipe"]            = models.active_recipe;
+        models.command_line_recipe                 = models.active_recipe;
     }
     refresh_model_catalog(runtime);
     mark_model_activity(runtime);
@@ -677,6 +683,18 @@ void prepare_model_load(ServerRuntime& runtime, json& body, SDContextParams& con
     if (!selection.is_object())
         throw std::runtime_error("models must be an object");
     auto& models = *runtime.models;
+    if (recipe_id == "@command-line") {
+        if (models.command_line_recipe.is_null() || !selection.empty())
+            throw std::runtime_error("command-line model requires saved startup arguments and an empty model selection");
+        context  = models.command_line_context;
+        defaults = models.command_line_defaults;
+        if (loaded_recipe)
+            *loaded_recipe = models.command_line_recipe;
+        body["models"] = json::object();
+        if (!context.resolve_and_validate(IMG_GEN))
+            throw std::runtime_error("invalid command-line model context parameters");
+        return;
+    }
     std::lock_guard<std::mutex> lock(models.catalog_mutex);
     const auto found = models.recipes.find(recipe_id);
     if (found == models.recipes.end())

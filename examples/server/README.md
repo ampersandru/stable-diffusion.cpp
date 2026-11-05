@@ -253,6 +253,18 @@ Negative values are rejected. For example:
 sd-server -m /models/model.safetensors --backend cuda0 --params-backend cuda0 --ttl 300
 ```
 
+The web UI Settings page displays the current **Model idle timeout (TTL)** and
+allows changing it without restarting. **Apply timeout** updates the running
+server for all clients and starts a fresh idle interval. Restarting restores the
+startup argument. Setting `0` disables future idle unloading; a model already
+asleep stays asleep until requested.
+
+When the selected model is asleep or unloaded, the prompt button becomes
+**Load & Generate**. It loads the selected recipe and component files before
+submitting the current prompt, preserving the current generation settings. The
+saved **Command-line model** remains selectable after an explicit unload or a
+switch to another recipe and can be loaded the same way.
+
 The server remains running and automatically reloads the model before handling
 the next image or video generation request, including OpenAI and WebUI-compatible
 requests from clients such as Open WebUI. The first request after sleep waits for

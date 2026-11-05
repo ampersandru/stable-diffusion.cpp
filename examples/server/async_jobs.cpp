@@ -404,14 +404,10 @@ void async_job_worker(ServerRuntime& runtime) {
         std::shared_ptr<AsyncGenerationJob> job;
         {
             std::unique_lock<std::mutex> lock(manager.mutex);
-            if (runtime.svr_params->sleep_idle_seconds > 0) {
-                if (!manager.cv.wait_for(lock, std::chrono::seconds(1), [&]() { return manager.stop || !manager.queue.empty(); })) {
-                    lock.unlock();
-                    sleep_idle_model(runtime);
-                    continue;
-                }
-            } else {
-                manager.cv.wait(lock, [&]() { return manager.stop || !manager.queue.empty(); });
+            if (!manager.cv.wait_for(lock, std::chrono::seconds(1), [&]() { return manager.stop || !manager.queue.empty(); })) {
+                lock.unlock();
+                sleep_idle_model(runtime);
+                continue;
             }
 
             if (manager.stop && manager.queue.empty()) {

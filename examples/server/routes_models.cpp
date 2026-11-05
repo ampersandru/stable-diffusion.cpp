@@ -1,5 +1,6 @@
 #include "routes.h"
 
+#include <limits>
 #include <stdexcept>
 
 #include "async_jobs.h"
@@ -28,15 +29,17 @@ struct ModelActivityGuard {
 };
 
 void sleep_idle_model(ServerRuntime& runtime) {
-    const int timeout = runtime.svr_params->sleep_idle_seconds;
-    if (timeout <= 0)
-        return;
     auto& models = *runtime.models;
+    if (models.sleep_idle_seconds.load() <= 0)
+        return;
     std::unique_lock<std::mutex> admission(models.admission_mutex, std::try_to_lock);
     if (!admission.owns_lock())
         return;
     std::unique_lock<std::shared_mutex> lock(models.runtime_mutex, std::try_to_lock);
     if (!lock.owns_lock() || !runtime.sd_ctx || models.sleeping)
+        return;
+    const int timeout = models.sleep_idle_seconds.load();
+    if (timeout <= 0)
         return;
     {
         std::lock_guard<std::mutex> jobs_lock(runtime.async_job_manager->mutex);
@@ -114,7 +117,7 @@ httplib::Server::Handler RuntimeRoutes::protect(httplib::Server::Handler handler
                                 req.path == "/v1/images/generations" || req.path == "/v1/images/edits";
         auto& models = *runtime->models;
         std::unique_lock<std::mutex> admission(models.admission_mutex, std::defer_lock);
-        if (generation && runtime->svr_params->sleep_idle_seconds > 0)
+        if (generation)
             admission.lock();
         std::shared_lock<std::shared_mutex> lock(runtime->models->runtime_mutex, std::try_to_lock);
         if (!lock.owns_lock()) {
@@ -174,6 +177,11 @@ static void set_model_status(ServerRuntime& runtime, const char* state, const js
         }
     }
     models.status = {{"state", state}, {"recipe", recipe}, {"models", selection}, {"error", error}, {"revision", revision}, {"load_elapsed_seconds", elapsed}};
+    if (recipe == "@command-line") {
+        models.status["recipe"]         = nullptr;
+        models.status["origin"]         = "command_line";
+        models.status["runtime_recipe"] = models.command_line_recipe;
+    }
 }
 
 static void change_model(ServerRuntime& runtime, const httplib::Request& req, httplib::Response& res, bool unload) {
@@ -215,8 +223,9 @@ static void change_model(ServerRuntime& runtime, const httplib::Request& req, ht
     // to different files (e.g. a model directory symlink retargeted inside
     // the configured root since the catalog was last scanned).
     if (!unload) {
-        json current = model_status(runtime);
-        if (current.value("state", "") == "ready" && current.value("recipe", json(nullptr)) == body.at("recipe") &&
+        json current              = model_status(runtime);
+        const json current_recipe = current.value("origin", "") == "command_line" ? json("@command-line") : current.value("recipe", json(nullptr));
+        if (current.value("state", "") == "ready" && current_recipe == body.at("recipe") &&
             current.value("models", json::object()) == body.at("models") && models.active_recipe == loaded_recipe &&
             component_paths_match(*runtime.ctx_params, context)) {
             current["already_loaded"] = true;
@@ -260,6 +269,21 @@ static void change_model(ServerRuntime& runtime, const httplib::Request& req, ht
 }
 
 void register_model_endpoints(httplib::Server& svr, ServerRuntime& runtime) {
+    svr.Post("/sdcpp/v1/models/settings", [&runtime](const httplib::Request& req, httplib::Response& res) {
+        try {
+            const auto body = json::parse(req.body);
+            if (!body.is_object() || body.size() != 1 || !body.contains("sleep_idle_seconds") ||
+                !body["sleep_idle_seconds"].is_number_integer() || body["sleep_idle_seconds"] < 0 ||
+                body["sleep_idle_seconds"] > std::numeric_limits<int>::max())
+                throw std::runtime_error("sleep_idle_seconds must be an integer from 0 to 2147483647");
+            std::shared_lock<std::shared_mutex> lock(runtime.models->runtime_mutex);
+            runtime.models->sleep_idle_seconds = body["sleep_idle_seconds"].get<int>();
+            mark_model_activity(runtime);
+            res.set_content(model_status(runtime).dump(), "application/json");
+        } catch (const std::exception& e) {
+            model_error(res, 400, "invalid_model_settings", e.what());
+        }
+    });
     svr.Get("/sdcpp/v1/recipes", [&runtime](const httplib::Request&, httplib::Response& res) {
         auto& models = *runtime.models;
         std::lock_guard<std::mutex> lock(models.catalog_mutex);

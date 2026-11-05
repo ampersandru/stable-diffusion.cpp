@@ -38,6 +38,10 @@ struct ServerModels {
     SDCtxPtr context;
     SDContextParams base_context;
     SDGenerationParams base_defaults;
+    SDContextParams command_line_context;
+    SDGenerationParams command_line_defaults;
+    json command_line_recipe = nullptr;
+    std::atomic<int> sleep_idle_seconds{0};
     std::map<std::string, json> recipes;
     std::map<std::string, ModelFile> files;
     std::chrono::steady_clock::time_point load_started_at;
